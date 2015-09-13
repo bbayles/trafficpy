@@ -35,8 +35,8 @@ ipv4_header = Struct(
     'c'  # Version / IHL
     'c'  # DSCP / ECN
     'H'  # Total length
-    '2s'  # Identification
-    '2s'  # Flags / Fragment offset
+    'H'  # Identification
+    'H'  # Flags / Fragment offset
     'B'  # Time to live
     'B'  # Protocol
     'H'  # Header checksum

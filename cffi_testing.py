@@ -43,6 +43,7 @@ class MetadataStats(object):
 
 
 flow_stats = defaultdict(lambda: defaultdict(MetadataStats))
+fragment_holder = {}
 packet_queue = Queue(maxsize=0)
 stop_event = Event()
 
@@ -139,8 +140,7 @@ def read_data():
         except Empty:
             if stop_event.is_set():
                 break
-            else:
-                continue
+            continue
 
         seconds, microseconds, captured_length, packet_length, pkt_data = data
 
@@ -163,29 +163,62 @@ def read_data():
         # what type it is.
         # ether_type 0x0800 is IPv4
         # ether_type 0x86dd is IPv6
+        more_fragments = 0
+        frag_offset = 0
         if ether_type == 0x0800:
-            ip_version = 4
             address_family = AF_INET
             ip_data = ipv4_header.unpack_from(pkt_data, l3_offset)
+
             version_ihl = ip_data[0][0]
             version = ip_data[0][0] >> 4
+            if version != 4:
+                print('IP version did not match EtherType')
+
+            protocol = ip_data[6]
+
             ihl = version_ihl & 0x0F
             l4_offset = l3_offset + (ihl * 4)
-            protocol = ip_data[6]
+
+            frag_key = ip_data[3]
+            frag_info = ip_data[4]
+            more_fragments = (frag_info >> 13) & 0b001
+            frag_offset = frag_info & 0x1FFF
         elif ether_type == 0x86dd:
-            ip_version = 6
             address_family = AF_INET6
             ip_data = ipv6_header.unpack_from(pkt_data, l3_offset)
+
             version = ip_data[0][0] >> 4
-            l4_offset = l3_offset + ipv6_header.size
+            if version != 6:
+                print('IP version did not match EtherType')
+
             protocol = ip_data[2]
+
+            l4_offset = l3_offset + ipv6_header.size
         else:
             print('Unrecognized L3 type {}'.format(ether_type))
             continue
 
-        # Verify IP version
-        if version != ip_version:
-            print('IP version did not match!')
+        # Not part of a fragment, and nothing left
+        if (not frag_offset) and (not more_fragments):
+            pass
+        # The first part of a fragment
+        elif (not frag_offset) and more_fragments:
+            frag_value = frag_offset, pkt_data[l4_offset:]
+            fragment_holder[frag_key] = [frag_value]
+            continue
+        # The last part of a fragment
+        elif frag_offset and (not more_fragments):
+            frag_value = frag_offset, pkt_data[l4_offset:]
+            fragment_holder[frag_key].append(frag_value)
+
+            frag_parts = sorted(fragment_holder[frag_key])
+            assembled = b''.join(x[1] for x in frag_parts)
+
+            del fragment_holder[frag_key]
+        # The middle of a fragment
+        elif frag_offset and more_fragments:
+            frag_value = frag_offset, pkt_data[l4_offset:]
+            fragment_holder[frag_key].append(frag_value)
             continue
 
         tcp_flags = 0
@@ -221,7 +254,7 @@ def read_data():
             seconds, packet_length, tcp_flags
         )
 
-        print(*flow_key, sep='\t')
+        # print(*flow_key, sep='\t')
         packet_count += 1
 
     print('Reader loop completed. Read {} packets'.format(packet_count))
