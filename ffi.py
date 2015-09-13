@@ -65,6 +65,7 @@ int pcap_activate(pcap_t *);
 void pcap_close(pcap_t *p);
 
 int pcap_loop(pcap_t *p, int cnt, pcap_handler callback, u_char *user);
+void pcap_breakloop(pcap_t *);
 
 int pcap_set_buffer_size(pcap_t *p, int buffer_size);
 int pcap_set_promisc(pcap_t *p, int promisc);

@@ -2,10 +2,33 @@ from struct import Struct
 
 ethernet_header = Struct(
     '!'  # Network order
-    '6s'  # Source MAC address
     '6s'  # Destination MAC address
+    '6s'  # Source MAC address
     'H'  # Ethertype
 )
+
+
+ethernet_q_header = Struct(
+    '!'  # Network order
+    '6s'  # Destination MAC address
+    '6s'  # Source MAC address
+    'H'  # TPID
+    'H'  # TCI
+    'H'  # Ethertype
+)
+
+
+ethernet_qq_header = Struct(
+    '!'  # Network order
+    '6s'  # Destination MAC address
+    '6s'  # Source MAC address
+    'H'  # Outer TPID
+    'H'  # Outer TCI
+    'H'  # Inner TPID
+    'H'  # Inner TCI
+    'H'  # Ethertype
+)
+
 
 ipv4_header = Struct(
     '!'  # Network order
@@ -19,6 +42,17 @@ ipv4_header = Struct(
     'H'  # Header checksum
     '4s'  # Source IP address
     '4s'  # Destination IP address
+)
+
+
+ipv6_header = Struct(
+    '!'  # Network oder
+    '4s'  # Version, Traffic class, Flow label
+    'H'  # Payload length
+    'B'  # Next Header
+    'c'  # Hop limit
+    '16s'  # Source IP address
+    '16s'  # Destination IP address
 )
 
 tcp_header = Struct(

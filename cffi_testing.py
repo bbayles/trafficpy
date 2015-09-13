@@ -1,18 +1,48 @@
+from collections import defaultdict
 from os import initgroups, setgid, setuid
 from pwd import getpwnam
 from queue import Empty, Queue
-from socket import inet_ntoa
+from socket import inet_ntop, AF_INET, AF_INET6
 from threading import Event, Thread
 
 from ffi import ffi, libpcap
 from network_structs import (
     ethernet_header,
+    ethernet_q_header,
+    ethernet_qq_header,
     icmp_header,
     ipv4_header,
+    ipv6_header,
     tcp_header,
     udp_header,
 )
 
+
+class MetadataStats(object):
+    __slots__ = [
+        'start_ts', 'end_ts', 'packet_count', 'byte_count', 'tcp_flags'
+    ]
+
+    def __init__(self):
+        self.start_ts = 2147483647  # 2038-01-19 03:14:07
+        self.end_ts = 0  # 1970-01-01 00:00:00
+        self.packet_count = 0
+        self.byte_count = 0
+        self.tcp_flags = 0
+
+    def update(self, time_stamp, byte_count, tcp_flags):
+        if time_stamp < self.start_ts:
+            self.start_ts = time_stamp
+
+        if time_stamp > self.end_ts:
+            self.end_ts = time_stamp
+
+        self.packet_count += 1
+        self.byte_count += 1
+        self.tcp_flags |= tcp_flags
+
+
+flow_stats = defaultdict(lambda: defaultdict(MetadataStats))
 packet_queue = Queue(maxsize=0)
 stop_event = Event()
 
@@ -96,6 +126,7 @@ def file_capture(file_path, bpf_expression=None):
 
 
 def read_data():
+    global flow_stats
     global packet_queue
     global stop_event
 
@@ -113,71 +144,84 @@ def read_data():
 
         seconds, microseconds, captured_length, packet_length, pkt_data = data
 
-        # Determine where the layer 3 data starts
-        src_mac, dst_mac, ether_type = ethernet_header.unpack_from(pkt_data, 0)
+        # Inspect the Ethernet header to determine where the layer 3 data
+        # starts and what type it is.-
+        # ether_type 0x8100 has a VLAN tag (802.1Q)
+        # ether_type 0x88A8 and 0x9100 have two VLAN tags (Q-in-Q)
+        ether_type = ethernet_header.unpack_from(pkt_data, 0)[-1]
+        l3_offset = ethernet_header.size
+        if ether_type == 0x8100:
+            ether_type = ethernet_q_header.unpack_from(pkt_data, 0)[-1]
+            l3_offset = ethernet_q_header.size
+            print('Q tagging detected')
+        elif (ether_type == 0x88A8) or (ether_type == 0x9100):
+            ether_type = ethernet_qq_header.unpack_from(pkt_data, 0)[-1]
+            l3_offset = ethernet_qq_header.size
+            print('Q-in-Q tagging detected')
 
-        if ether_type == 0x0800:  # Normal Ethernet
-            l3_offset = ethernet_header.size + 0
-        elif ether_type == 0x8100:  # 802.1q VLAN tag
-            l3_offset = ethernet_header.size + 4
-        elif ether_type == 0x88A8:  # 802.1ad S-tag and C-tag
-            l3_offset = ethernet_header.size + 8
-        elif ether_type == 0x9100:  # Earlier QinQ version
-            l3_offset = ethernet_header.size + 8
+        # Inspec the IP header to determine where the layer 4 data starts and
+        # what type it is.
+        # ether_type 0x0800 is IPv4
+        # ether_type 0x86dd is IPv6
+        if ether_type == 0x0800:
+            ip_version = 4
+            address_family = AF_INET
+            ip_data = ipv4_header.unpack_from(pkt_data, l3_offset)
+            version_ihl = ip_data[0][0]
+            version = ip_data[0][0] >> 4
+            ihl = version_ihl & 0x0F
+            l4_offset = l3_offset + (ihl * 4)
+            protocol = ip_data[6]
+        elif ether_type == 0x86dd:
+            ip_version = 6
+            address_family = AF_INET6
+            ip_data = ipv6_header.unpack_from(pkt_data, l3_offset)
+            version = ip_data[0][0] >> 4
+            l4_offset = l3_offset + ipv6_header.size
+            protocol = ip_data[2]
         else:
-            print('Unrecognized L2 header {}'.format(ether_type))
+            print('Unrecognized L3 type {}'.format(ether_type))
             continue
 
-        ip_data = ipv4_header.unpack_from(pkt_data, l3_offset)
-
-        # Verify IPv4
-        version_ihl = ip_data[0][0]
-        version = version_ihl >> 4
-        if version != 4:
-            print('Unrecognized IP version')
+        # Verify IP version
+        if version != ip_version:
+            print('IP version did not match!')
             continue
 
-        # Determine where the layer 4 data starts and what type it is
-        ihl = version_ihl & 0x0F
-        l4_offset = l3_offset + (ihl * 4)
-
-        protocol = ip_data[6]
-        if protocol == 0x01:
-            l4_header = icmp_header
-        elif protocol == 0x06:
-            l4_header = tcp_header
+        tcp_flags = 0
+        # TCP
+        if protocol == 0x06:
+            l4_data = tcp_header.unpack_from(pkt_data, l4_offset)
+            flag_data = l4_data[4]
+            tcp_flags = ((flag_data[0] & 0x01) << 8) ^ flag_data[1]
+        # UDP
         elif protocol == 0x11:
-            l4_header = udp_header
+            l4_data = udp_header.unpack_from(pkt_data, l4_offset)
+        # ICMP or ICMPv6
+        elif (protocol == 0x01) or (protocol == 0x3a):
+            l4_data = icmp_header.unpack_from(pkt_data, l4_offset)
         else:
             print('Unrecognized L4 header {}'.format(protocol))
             continue
 
-        l4_data = l4_header.unpack_from(pkt_data, l4_offset)
-
-        # Extract the relevant data
-        src_ip = ip_data[8]
-        dst_ip = ip_data[9]
+        src_ip = ip_data[-2]
+        dst_ip = ip_data[-1]
         src_port = l4_data[0]
         dst_port = l4_data[1]
 
-        # flag_data is two bytes. The last bit of the first byte has the NS
-        # flag. The second byte has the other 8 flags.
-        flag_data = l4_data[4]
-        flags = ((flag_data[0] & 0x01) << 8) ^ flag_data[1]
-
-        packet = (
-            seconds,
-            microseconds,
-            inet_ntoa(src_ip),
-            inet_ntoa(dst_ip),
-            protocol,
+        time_key = (seconds // 10) * 10
+        flow_key = (
+            inet_ntop(address_family, src_ip),
+            inet_ntop(address_family, dst_ip),
             src_port,
             dst_port,
-            flags,
-            packet_length,
+            protocol,
+        )
+        flow_stats[time_key][flow_key].update(
+            seconds, packet_length, tcp_flags
         )
 
-        print(*packet, sep='\t')
+        print(*flow_key, sep='\t')
         packet_count += 1
 
     print('Reader loop completed. Read {} packets'.format(packet_count))
@@ -185,13 +229,13 @@ def read_data():
 
 if __name__ == '__main__':
     reader_thread = Thread(target=read_data)
-    reader_thread.setDaemon(True)
     reader_thread.start()
 
-    # capture_thread = Thread(target=live_capture, args=(b'wlan0', 10))
     capture_thread = Thread(
         target=file_capture,
-        args=(b'/home/bo/Downloads/pcap-test.pcap',),
-        kwargs={'bpf_expression': b'tcp'},
+        kwargs={
+            'file_path': b'/home/bo/Downloads/pcap-test.pcap',
+            'bpf_expression': b'ip',
+        },
     )
     capture_thread.start()
