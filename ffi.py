@@ -1,7 +1,7 @@
 from cffi import FFI
 
 ffi = FFI()
-libpcap = ffi.dlopen('/home/bo/Code/bbcap/libpcap/libpcap.so.1.8.0-PRE-GIT')
+libpcap = ffi.dlopen('/home/bo/Code/bbcap/libpcap/libpcap.so.1.7.4')
 
 cdefs = """
 #define PCAP_VERSION_MAJOR 2
