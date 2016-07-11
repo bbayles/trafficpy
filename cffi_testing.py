@@ -267,7 +267,7 @@ if __name__ == '__main__':
     capture_thread = Thread(
         target=file_capture,
         kwargs={
-            'file_path': b'/home/bo/Downloads/pcap-test.pcap',
+            'file_path': b'/home/bo/Downloads/rewritten.pcap',
             'bpf_expression': b'ip',
         },
     )

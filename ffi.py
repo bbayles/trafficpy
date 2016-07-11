@@ -4,20 +4,28 @@ ffi = FFI()
 libpcap = ffi.dlopen('/home/bo/Code/bbcap/libpcap/libpcap.so.1.8.0-PRE-GIT')
 
 cdefs = """
+#define PCAP_VERSION_MAJOR 2
+#define PCAP_VERSION_MINOR 4
 #define PCAP_ERRBUF_SIZE 256
+#define PCAP_IF_LOOPBACK	0x00000001
+#define MODE_CAPT 0
+#define MODE_STAT 1
+
 #define PCAP_NETMASK_UNKNOWN 0xffffffff
 
 typedef unsigned char u_char;
 typedef unsigned int u_int;
 typedef unsigned short int u_short;
 
+typedef int bpf_int32;
 typedef u_int bpf_u_int32;
+typedef struct pcap_dumper pcap_dumper_t;
 
 typedef long int __time_t;
 typedef long int __suseconds_t;
 
 typedef struct pcap pcap_t;
-
+typedef struct pcap_addr pcap_addr_t;
 
 struct timeval {
     __time_t tv_sec;
@@ -36,10 +44,34 @@ struct pcap_if {
     bpf_u_int32 flags;
 };
 
+struct pcap_addr {
+    struct pcap_addr *next;
+    struct sockaddr *addr;
+    struct sockaddr *netmask;
+    struct sockaddr *broadaddr;
+    struct sockaddr *dstaddr;
+};
+
+struct pcap_file_header {
+    bpf_u_int32 magic;
+    u_short version_major;
+    u_short version_minor;
+    bpf_int32 thiszone;
+    bpf_u_int32 sigfigs;
+    bpf_u_int32 snaplen;
+    bpf_u_int32 linktype;
+};
+
 struct pcap_pkthdr {
     struct timeval ts;
     bpf_u_int32 caplen;
     bpf_u_int32 len;
+};
+
+struct pcap_stat {
+    u_int ps_recv;
+    u_int ps_drop;
+    u_int ps_ifdrop;
 };
 
 struct bpf_insn {
