@@ -13,6 +13,7 @@ from network_structs import (
     icmp_header,
     ipv4_header,
     ipv6_header,
+    sll_header,
     tcp_header,
     udp_header,
 )
@@ -46,6 +47,8 @@ flow_stats = defaultdict(lambda: defaultdict(MetadataStats))
 fragment_holder = {}
 packet_queue = Queue(maxsize=0)
 stop_event = Event()
+l2_header = None
+L2_HEADER_STRUCT = {1: ethernet_header, 113: sll_header}
 
 
 def drop_privileges(target_user):
@@ -90,11 +93,15 @@ def live_capture(
     drop_to_user=None,
     bpf_expression=None,
 ):
+    global l2_header
     source = ffi.new('const char[]', device)
     errbuf = ffi.new('char[]', libpcap.PCAP_ERRBUF_SIZE)
     handle = libpcap.pcap_create(source, errbuf)
     libpcap.pcap_set_snaplen(handle, snaplen)
     libpcap.pcap_activate(handle)
+
+    pcap_datalink = libpcap.pcap_datalink(handle)
+    l2_header = L2_HEADER_STRUCT[pcap_datalink]
 
     if bpf_expression is not None:
         set_filter(handle, bpf_expression)
@@ -111,9 +118,14 @@ def live_capture(
 
 
 def file_capture(file_path, bpf_expression=None):
+    global l2_header
+
     source = ffi.new('const char[]', file_path)
     errbuf = ffi.new('char[]', libpcap.PCAP_ERRBUF_SIZE)
     handle = libpcap.pcap_open_offline(source, errbuf)
+
+    pcap_datalink = libpcap.pcap_datalink(handle)
+    l2_header = L2_HEADER_STRUCT[pcap_datalink]
 
     if bpf_expression is not None:
         set_filter(handle, bpf_expression)
@@ -128,6 +140,7 @@ def file_capture(file_path, bpf_expression=None):
 
 def read_data():
     global flow_stats
+    global l2_header
     global packet_queue
     global stop_event
 
@@ -148,8 +161,8 @@ def read_data():
         # starts and what type it is.-
         # ether_type 0x8100 has a VLAN tag (802.1Q)
         # ether_type 0x88A8 and 0x9100 have two VLAN tags (Q-in-Q)
-        ether_type = ethernet_header.unpack_from(pkt_data, 0)[-1]
-        l3_offset = ethernet_header.size
+        ether_type = l2_header.unpack_from(pkt_data, 0)[-1]
+        l3_offset = l2_header.size
         if ether_type == 0x8100:
             ether_type = ethernet_q_header.unpack_from(pkt_data, 0)[-1]
             l3_offset = ethernet_q_header.size
@@ -159,7 +172,7 @@ def read_data():
             l3_offset = ethernet_qq_header.size
             print('Q-in-Q tagging detected')
 
-        # Inspec the IP header to determine where the layer 4 data starts and
+        # Inspect the IP header to determine where the layer 4 data starts and
         # what type it is.
         # ether_type 0x0800 is IPv4
         # ether_type 0x86dd is IPv6

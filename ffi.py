@@ -114,6 +114,7 @@ int pcap_compile(
     int optimize,
     bpf_u_int32 netmask
 );
+int	pcap_datalink(pcap_t *);
 int pcap_setfilter(pcap_t *p, struct bpf_program *fp);
 """
 

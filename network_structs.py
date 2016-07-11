@@ -30,6 +30,16 @@ ethernet_qq_header = Struct(
 )
 
 
+sll_header = Struct(
+    '!'  # Network order
+    'H'  # Packet type
+    'H'  # ARPHRD_ type
+    'H'  # Link-layer address length
+    '8s'  # MAC address
+    'H'  # Ethertype
+)
+
+
 ipv4_header = Struct(
     '!'  # Network order
     'c'  # Version / IHL
